@@ -27,6 +27,13 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build
 
+      - name: Configure npm authentication
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          npm whoami
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Check if version exists
         id: check
         run: |
@@ -37,11 +44,9 @@ jobs:
           else
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to npm
         if: steps.check.outputs.exists == 'false'
         run: npm publish --provenance --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
