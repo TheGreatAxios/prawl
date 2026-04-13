@@ -1,6 +1,6 @@
 {
   "name": "@thegreataxios/prawl",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "CLI for AI Agents to use an Internet Browser",
   "type": "module",
   "bin": {
