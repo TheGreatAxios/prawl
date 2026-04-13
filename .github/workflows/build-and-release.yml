@@ -52,7 +52,6 @@ jobs:
   build-macos:
     runs-on: macos-latest
     env:
-      # Make secrets available as env vars for conditional checks
       APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -81,14 +80,12 @@ jobs:
           ./prawl --help
           echo "✅ Binary compiles successfully"
 
-      # Code signing (only runs if secrets are configured)
       - name: Setup signing credentials
         id: setup_signing
         if: env.APPLE_CERTIFICATE_BASE64 != ''
         run: |
           echo "Setting up signing keychain..."
           
-          # Create temporary keychain
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
           
@@ -96,7 +93,6 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           
-          # Import certificate
           echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
           security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH"
@@ -110,7 +106,6 @@ jobs:
         run: |
           echo "Signing binary with Developer ID..."
           
-          # Find signing identity
           IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
           
           if [ -z "$IDENTITY" ]; then
@@ -121,13 +116,11 @@ jobs:
           
           echo "Using identity: $IDENTITY"
           
-          # Sign with entitlements
           codesign --force --deep --sign "$IDENTITY" \
             --entitlements ./scripts/entitlements.plist \
             --options runtime \
             ./prawl
           
-          # Verify signing
           codesign --verify --verbose ./prawl
           
           echo "✅ Binary signed successfully"
@@ -138,10 +131,8 @@ jobs:
         run: |
           echo "Notarizing binary..."
           
-          # Create zip for notarization
           ditto -c -k --keepParent ./prawl ./prawl.zip
           
-          # Submit for notarization
           xcrun notarytool submit ./prawl.zip \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
@@ -149,7 +140,6 @@ jobs:
             --wait \
             --output-format json > notarization.json || true
           
-          # Check status
           STATUS=$(cat notarization.json 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "")
           
           if [ "$STATUS" != "Accepted" ]; then
@@ -160,8 +150,6 @@ jobs:
           fi
           
           echo "✅ Notarization successful"
-          
-          # Staple ticket to binary
           xcrun stapler staple ./prawl || true
           echo "✅ Notarization ticket stapled"
           
@@ -217,7 +205,6 @@ jobs:
             cp artifacts/prawl-macos-signed/prawl release/prawl-macos
             chmod +x release/prawl-macos
             echo "✅ Added prawl-macos (signed & notarized)"
-          # macOS unsigned (fallback)
           elif [ -f artifacts/prawl-macos-unsigned/prawl ]; then
             cp artifacts/prawl-macos-unsigned/prawl release/prawl-macos
             chmod +x release/prawl-macos
@@ -252,7 +239,6 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           
-          # Check if release already exists
           if gh release view "$VERSION" &>/dev/null; then
             echo "Release $VERSION already exists"
             echo "exists=true" >> $GITHUB_OUTPUT
@@ -282,7 +268,6 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           echo "Updating existing release $VERSION with new artifacts..."
           
-          # Upload artifacts to existing release
           for file in release/*; do
             if [ -f "$file" ]; then
               echo "Uploading: $file"
@@ -295,7 +280,6 @@ jobs:
       - name: Trigger Homebrew Tap Update
         env:
           TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           echo "Debug: VERSION=$VERSION"
@@ -303,10 +287,6 @@ jobs:
           
           if [ -z "$TAP_TOKEN" ]; then
             echo "❌ TAP_GITHUB_TOKEN not configured. Skipping homebrew tap update."
-            echo "To enable:"
-            echo "  1. Create a Personal Access Token at https://github.com/settings/tokens"
-            echo "  2. Grant 'repo' scope for the homebrew-tap repository"
-            echo "  3. Add as TAP_GITHUB_TOKEN secret in prawl repository settings"
             exit 0
           fi
           

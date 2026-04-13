@@ -4,7 +4,7 @@
   "description": "CLI for AI Agents to use an Internet Browser",
   "type": "module",
   "bin": {
-    "prawl": "./dist/cli.mjs"
+    "prawl": "dist/cli.mjs"
   },
   "main": "./dist/cli.mjs",
   "files": [
@@ -33,7 +33,10 @@
   ],
   "author": "Sawyer Cutler",
   "license": "MIT",
-  "repository": "github:thegreataxios/prawl",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thegreataxios/prawl.git"
+  },
   "homepage": "https://github.com/thegreataxios/prawl#readme",
   "bugs": "https://github.com/thegreataxios/prawl/issues",
   "dependencies": {
