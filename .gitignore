@@ -2,7 +2,6 @@ node_modules
 .DS_Store
 .env
 dist/
-peep
 *.zip
-.peep/
 prawl
+prawl/

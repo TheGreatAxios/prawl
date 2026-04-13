@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  check:
     runs-on: macos-latest
     
     steps:
@@ -28,20 +28,14 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Run tests
+        run: bun test
+
       - name: Test CLI help
         run: bun run dev --help
 
-      - name: Compile binary
+      - name: Compile binary (verify it works)
         run: bun run compile
 
-      - name: Test binary
+      - name: Test compiled binary
         run: ./prawl --help
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: |
-            dist/
-            prawl
-          retention-days: 7

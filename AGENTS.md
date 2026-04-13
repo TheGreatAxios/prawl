@@ -127,6 +127,49 @@ pkill -f prawl && sleep 1 && ./run.sh
 - `dist/cli.mjs` - Bundled output (~32KB)
 - `prawl` - Native executable after `bun run compile`
 
+## GitHub Releases
+
+The project uses an automated release workflow that builds and publishes binaries:
+
+### Workflows
+
+- **Build and Release** (`.github/workflows/build-and-release.yml`)
+  - Runs on: push to `main`, tags `v*`, or manual dispatch
+  - Builds Linux and macOS binaries in parallel
+  - Signs macOS binary if Apple Developer secrets are configured
+  - Creates/updates GitHub release with compiled binaries
+  - Triggers homebrew tap update (if `TAP_GITHUB_TOKEN` is configured)
+
+- **Individual Build Workflows** (`.github/workflows/build-*.yml`)
+  - Run on: PRs (for testing) or manual dispatch
+  - Used for testing builds without creating releases
+
+### Release Artifacts
+
+Each release includes:
+- `prawl-macos` - macOS binary (signed & notarized if secrets configured)
+- `prawl-linux` - Linux x64 binary
+
+### Required Secrets for Signed Releases
+
+To enable signed macOS releases, add these GitHub secrets:
+
+| Secret | Description | How to get |
+|--------|-------------|------------|
+| `APPLE_CERTIFICATE_BASE64` | Base64-encoded .p12 Developer ID certificate | Export from Keychain, base64 encode |
+| `APPLE_CERTIFICATE_PASSWORD` | Password for the .p12 file | Set when exporting certificate |
+| `APPLE_TEAM_ID` | Apple Developer Team ID (10 chars) | https://developer.apple.com/account |
+| `APPLE_ID` | Your Apple ID email | Your Apple Developer account email |
+| `APPLE_APP_PASSWORD` | App-specific password | https://appleid.apple.com → Security |
+| `TAP_GITHUB_TOKEN` | PAT for homebrew-tap repo | GitHub PAT with `repo` scope |
+
+Without these secrets, releases will still be created but macOS binaries will be unsigned.
+
+### NPM Publishing
+
+Separate from GitHub releases, the package is also published to NPM via `.github/workflows/publish-npm.yml`.
+This publishes the `dist/cli.mjs` bundle for users who install via `bun install` or `npm install`.
+
 ## macOS Code Signing
 
 Two ways to provide Apple credentials (never commit secrets to git):

@@ -1,10 +1,13 @@
 name: Build Linux Binary
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/build-linux.yml'
 
 jobs:
   build:
@@ -26,7 +29,7 @@ jobs:
         run: bun run build
 
       - name: Compile binary
-        run: bun build --compile ./dist/cli.mjs --outfile prawl-linux
+        run: bun build --compile --minify --sourcemap ./dist/cli.mjs --outfile prawl-linux
 
       - name: Test binary
         run: |
@@ -38,4 +41,4 @@ jobs:
         with:
           name: prawl-linux
           path: prawl-linux
-          retention-days: 30
+          retention-days: 7

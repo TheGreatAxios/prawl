@@ -1,9 +1,0 @@
-{
-  "_comment": "peep configuration file - place in ~/.config/peep.json or ./peep.json",
-  "session": "default",
-  "headed": false,
-  "backend": "webkit",
-  "apiKey": "your-openai-api-key",
-  "baseUrl": "https://api.openai.com/v1",
-  "model": "gpt-4o-mini"
-}

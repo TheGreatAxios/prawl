@@ -1,0 +1,321 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  # ============================================
+  # BUILD JOBS
+  # ============================================
+  
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Compile binary
+        run: bun build --compile --minify --sourcemap ./dist/cli.mjs --outfile prawl-linux
+
+      - name: Test binary
+        run: |
+          ./prawl-linux --help
+          echo "✅ Linux binary test passed"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prawl-linux
+          path: prawl-linux
+          retention-days: 30
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Compile binary
+        run: bun run compile
+
+      - name: Test binary (unsigned)
+        run: |
+          ./prawl --help
+          echo "✅ Binary compiles successfully"
+
+      # Code signing (only runs if secrets are configured)
+      - name: Setup signing credentials
+        id: setup_signing
+        if: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "Setting up signing keychain..."
+          
+          # Create temporary keychain
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          
+          # Import certificate
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          
+          echo "✅ Signing credentials configured"
+          echo "signing_available=true" >> $GITHUB_OUTPUT
+
+      - name: Sign binary
+        id: sign_binary
+        if: steps.setup_signing.outputs.signing_available == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "Signing binary with Developer ID..."
+          
+          # Find signing identity
+          IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          
+          if [ -z "$IDENTITY" ]; then
+            echo "❌ No Developer ID Application certificate found"
+            echo "signing_success=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "Using identity: $IDENTITY"
+          
+          # Sign with entitlements
+          codesign --force --deep --sign "$IDENTITY" \
+            --entitlements ./scripts/entitlements.plist \
+            --options runtime \
+            ./prawl
+          
+          # Verify signing
+          codesign --verify --verbose ./prawl
+          
+          echo "✅ Binary signed successfully"
+          echo "signing_success=true" >> $GITHUB_OUTPUT
+
+      - name: Notarize binary
+        if: steps.sign_binary.outputs.signing_success == 'true' && secrets.APPLE_ID != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "Notarizing binary..."
+          
+          # Create zip for notarization
+          ditto -c -k --keepParent ./prawl ./prawl.zip
+          
+          # Submit for notarization
+          xcrun notarytool submit ./prawl.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --output-format json > notarization.json || true
+          
+          # Check status
+          STATUS=$(cat notarization.json 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "")
+          
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "⚠️ Notarization not accepted (status: $STATUS). Binary is signed but not notarized."
+            cat notarization.json 2>/dev/null || true
+            rm -f ./prawl.zip
+            exit 0
+          fi
+          
+          echo "✅ Notarization successful"
+          
+          # Staple ticket to binary
+          xcrun stapler staple ./prawl || true
+          echo "✅ Notarization ticket stapled"
+          
+          rm -f ./prawl.zip
+
+      - name: Upload unsigned artifact
+        if: steps.sign_binary.outputs.signing_success != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: prawl-macos-unsigned
+          path: prawl
+          retention-days: 30
+
+      - name: Upload signed artifact
+        if: steps.sign_binary.outputs.signing_success == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: prawl-macos-signed
+          path: prawl
+          retention-days: 30
+
+  # ============================================
+  # RELEASE JOB
+  # ============================================
+  
+  release:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: always() && (needs.build-linux.result == 'success' || needs.build-macos.result == 'success')
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: prawl-*
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          
+          echo "=== Available artifacts ==="
+          ls -la artifacts/ 2>/dev/null || echo "No artifacts directory"
+          find artifacts -type f 2>/dev/null || echo "No files found"
+          
+          # macOS signed (preferred)
+          if [ -f artifacts/prawl-macos-signed/prawl ]; then
+            cp artifacts/prawl-macos-signed/prawl release/prawl-macos
+            chmod +x release/prawl-macos
+            echo "✅ Added prawl-macos (signed & notarized)"
+          # macOS unsigned (fallback)
+          elif [ -f artifacts/prawl-macos-unsigned/prawl ]; then
+            cp artifacts/prawl-macos-unsigned/prawl release/prawl-macos
+            chmod +x release/prawl-macos
+            echo "⚠️ Added prawl-macos (unsigned)"
+          else
+            echo "❌ No macOS artifact found"
+          fi
+          
+          # Linux
+          if [ -f artifacts/prawl-linux/prawl-linux ]; then
+            cp artifacts/prawl-linux/prawl-linux release/prawl-linux
+            chmod +x release/prawl-linux
+            echo "✅ Added prawl-linux"
+          else
+            echo "❌ No Linux artifact found"
+          fi
+          
+          echo "=== Final release files ==="
+          ls -la release/
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "Version: v${VERSION}"
+
+      - name: Check for existing release
+        id: check_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          # Check if release already exists
+          if gh release view "$VERSION" &>/dev/null; then
+            echo "Release $VERSION already exists"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Release $VERSION does not exist"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') || contains(github.ref, 'rc') }}
+          fail_on_unmatched_files: false
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update existing release
+        if: steps.check_release.outputs.exists == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Updating existing release $VERSION with new artifacts..."
+          
+          # Upload artifacts to existing release
+          for file in release/*; do
+            if [ -f "$file" ]; then
+              echo "Uploading: $file"
+              gh release upload "$VERSION" "$file" --clobber || echo "Failed to upload $file"
+            fi
+          done
+          
+          echo "✅ Release updated"
+
+      - name: Trigger Homebrew Tap Update
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "⚠️ TAP_GITHUB_TOKEN not configured. Skipping homebrew tap update."
+            echo "To enable:"
+            echo "  1. Create a Personal Access Token at https://github.com/settings/tokens"
+            echo "  2. Grant 'repo' scope for the homebrew-tap repository"
+            echo "  3. Add as TAP_GITHUB_TOKEN secret in this repository settings"
+            exit 0
+          fi
+          
+          echo "Triggering homebrew tap update..."
+          
+          curl -X POST \
+            -H "Authorization: Bearer $TAP_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/thegreataxios/homebrew-tap/actions/workflows/update-formula.yml/dispatches \
+            -d '{"ref":"main","inputs":{"version":"${{ steps.version.outputs.version }}"}}' \
+            --fail-with-body 2>/dev/null && \
+            echo "✅ Homebrew tap update triggered" || \
+            echo "⚠️ Failed to trigger homebrew tap update"
+        continue-on-error: true
