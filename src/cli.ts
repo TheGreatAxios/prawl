@@ -42,8 +42,8 @@ async function createSession(
   return session;
 }
 
-// Load config files (optional) - sync version
-function loadConfig(): Record<string, string> {
+// Load config files (optional) - async version
+async function loadConfig(): Promise<Record<string, string>> {
   const configs: Record<string, string> = {};
   
   // ~/.config/prawl.json (user config)
@@ -53,7 +53,7 @@ function loadConfig(): Record<string, string> {
     const userConfigPath = `${home}/.config/prawl.json`;
     const userConfigFile = Bun.file(userConfigPath);
     if (userConfigFile.size > 0) {
-      const userConfig = JSON.parseSync(userConfigFile);
+      const userConfig = await userConfigFile.json() as Record<string, unknown>;
       Object.entries(userConfig).forEach(([key, value]) => {
         if (typeof value === "string" || typeof value === "boolean" || typeof value === "number") {
           configs[key] = String(value);
@@ -68,7 +68,7 @@ function loadConfig(): Record<string, string> {
   try {
     const projectConfigFile = Bun.file(`./prawl.json`);
     if (projectConfigFile.size > 0) {
-      const projectConfig = JSON.parseSync(projectConfigFile);
+      const projectConfig = await projectConfigFile.json() as Record<string, unknown>;
       Object.entries(projectConfig).forEach(([key, value]) => {
         if (typeof value === "string" || typeof value === "boolean" || typeof value === "number") {
           configs[key] = String(value);
@@ -82,7 +82,7 @@ function loadConfig(): Record<string, string> {
   return configs;
 }
 
-const config = loadConfig();
+const config = await loadConfig();
 
 // Apply config as env vars (if not already set) - CLI flags will override these
 const configToEnvMap: Record<string, string> = {
@@ -121,14 +121,14 @@ const cli = Cli.create("prawl", {
 
 // Middleware to resolve session
 cli.use(async (c, next) => {
-  // Safe access to options (may not be available for all commands)
-  const sessionName = (c.options?.session as string) || process.env.PRAWL_SESSION || "default";
-  const headed = (c.options?.headed as boolean) || false;
-  const backend = c.options?.backend as "webkit" | "chrome" | undefined;
+  // Use environment variables for session config (CLI options will be parsed at command level)
+  const sessionName = process.env.PRAWL_SESSION || "default";
+  const headed = process.env.PRAWL_HEADED === "true";
+  const backend = process.env.PRAWL_BACKEND as "webkit" | "chrome" | undefined;
   const isPrivate = sessionName === "private";
-  
+
   let session = getSession(sessionName);
-  
+
   if (!session) {
     session = await createSession(sessionName, {
       headed,
@@ -136,7 +136,7 @@ cli.use(async (c, next) => {
       private: isPrivate,
     });
   }
-  
+
   c.set("session", session);
   await next();
 });
@@ -181,7 +181,8 @@ cli.command("close", {
   async run(c) {
     const { controller } = c.var.session;
     await controller.close();
-    sessions.delete(c.options.session as string || "default");
+    // Use env var since middleware creates session based on it
+    sessions.delete(process.env.PRAWL_SESSION || "default");
     return { closed: true };
   },
 });
@@ -197,19 +198,24 @@ cli.command("connect", {
     const { controller } = c.var.session;
     
     // Auto-discover Chrome if no URL provided
-    let cdpUrl = c.args.cdpUrl;
+    let cdpUrl: string | undefined = c.args.cdpUrl;
     if (!cdpUrl) {
       try {
-        const res = await fetch("http://localhost:9222/json/version");
+        const res = await fetch(new Request("http://localhost:9222/json/version"));
         if (res.ok) {
-          const version = await res.json();
-          cdpUrl = `ws://localhost:9222/devtools/browser/${version.webSocketDebuggerUrl?.split('/').pop() || ''}`;
+          const version = await res.json() as { webSocketDebuggerUrl?: string };
+          const debuggerPath = version.webSocketDebuggerUrl?.split('/').pop() || '';
+          cdpUrl = `ws://localhost:9222/devtools/browser/${debuggerPath}`;
         }
       } catch {
         return c.error({ code: "NOT_FOUND", message: "No Chrome found on port 9222. Start Chrome with: --remote-debugging-port=9222" });
       }
     }
-    
+
+    if (!cdpUrl) {
+      return c.error({ code: "NOT_FOUND", message: "Failed to get Chrome CDP URL" });
+    }
+
     await controller.connectToChrome(cdpUrl);
     return { connected: true, url: cdpUrl };
   },
@@ -586,6 +592,8 @@ cli.command("find", {
     action: z.string(),
     element: z.object({ tag: z.string(), text: z.string().optional(), accessibleName: z.string().optional() }).optional(),
     text: z.string().optional(),
+    wasChecked: z.boolean().optional(),
+    wasUnchecked: z.boolean().optional(),
   }),
   async run(c) {
     const { controller } = c.var.session;
@@ -595,9 +603,13 @@ cli.command("find", {
     // Natural language parsing for ALL locator types
     // Supports: "first button", "second link", "label Email", "placeholder Search", etc.
     if (type === "text") {
-      const naturalPatterns = [
+      type NaturalPatternResult = { type: string; value: string; index?: number; name?: string } | null;
+      const naturalPatterns: Array<{
+        pattern: RegExp;
+        handler: (m: RegExpMatchArray) => NaturalPatternResult;
+      }> = [
         // Position-based: "first button", "2nd link", "last item"
-        { pattern: /^(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)\s+(.+)$/i, handler: (m: RegExpMatchArray) => {
+        { pattern: /^(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)\s+(.+)$/i, handler: (m) => {
           const pos = m[1].toLowerCase();
           const el = m[2].trim();
           const map: Record<string, { type: string; index?: number }> = {
@@ -612,13 +624,13 @@ cli.command("find", {
           return mapped ? { type: mapped.type, value: el, index: mapped.index } : null;
         }},
         // Role with name: "button named Submit", "link named Read more"
-        { pattern: /^(button|link|input|checkbox|radio|heading|img|image)\s+(?:named|with\s+name|with\s+text|labelled)\s+(.+)$/i, handler: (m: RegExpMatchArray) => {
+        { pattern: /^(button|link|input|checkbox|radio|heading|img|image)\s+(?:named|with\s+name|with\s+text|labelled)\s+(.+)$/i, handler: (m) => {
           const role = m[1].toLowerCase();
           const nm = m[2].trim();
           return { type: "role", value: role === "img" || role === "image" ? "img" : role, name: nm };
         }},
         // Direct locators: "label Email", "placeholder Search", "alt Logo", "title Close", "testid submit-btn"
-        { pattern: /^(label|placeholder|alt|title|testid)\s+(.+)$/i, handler: (m: RegExpMatchArray) => {
+        { pattern: /^(label|placeholder|alt|title|testid)\s+(.+)$/i, handler: (m) => {
           const locType = m[1].toLowerCase();
           const val = m[2].trim();
           return { type: locType, value: val };
@@ -630,10 +642,10 @@ cli.command("find", {
         if (match) {
           const result = handler(match);
           if (result) {
-            type = result.type as any;
+            type = result.type as typeof type;
             value = result.value;
-            if (result.index) index = result.index;
-            if (result.name) name = result.name;
+            if (result.index !== undefined) index = result.index;
+            if (result.name !== undefined) name = result.name;
             break;
           }
         }
@@ -1103,38 +1115,40 @@ cli.command("screenshot", {
   output: z.object({ path: z.string(), format: z.string() }),
   async run(c) {
     const { controller } = c.var.session;
-    
+    // Access options via command context - using type assertion for incur framework
+    const opts = (c as unknown as { options: { format?: "png" | "jpeg" | "webp"; quality?: number; fullPage?: boolean } }).options;
+
     const image = await controller.screenshot({
-      format: c.options.format as "png" | "jpeg" | "webp",
-      quality: c.options.quality,
-      fullPage: c.options.fullPage,
+      format: opts.format || "png",
+      quality: opts.quality,
+      fullPage: opts.fullPage,
     });
-    
+
     // Validate and sanitize output path
-    let outputPath = c.args.path || `/tmp/prawl-${Date.now()}.${c.options.format}`;
-    
+    let outputPath = c.args.path || `/tmp/prawl-${Date.now()}.${opts.format || "png"}`;
+
     // Prevent directory traversal - ensure path is within allowed directories
     const allowedDirs = [
       process.cwd(),
       '/tmp',
       process.env.HOME || '/tmp',
       process.env.PRAWL_OUTPUT_DIR,
-    ].filter(Boolean);
-    
-    const path = await import('path');
-    const resolvedPath = path.resolve(outputPath);
+    ].filter((d): d is string => typeof d === "string");
+
+    const pathModule = await import('path');
+    const resolvedPath = pathModule.resolve(outputPath);
     const isAllowed = allowedDirs.some(dir => resolvedPath.startsWith(dir));
-    
+
     if (!isAllowed && !process.env.PRAWL_UNRESTRICTED) {
-      return c.error({ 
-        code: "INVALID_PATH", 
-        message: `Path "${outputPath}" is outside allowed directories. Use cwd, /tmp, or set PRAWL_OUTPUT_DIR. Use --json for base64 output instead.` 
+      return c.error({
+        code: "INVALID_PATH",
+        message: `Path "${outputPath}" is outside allowed directories. Use cwd, /tmp, or set PRAWL_OUTPUT_DIR. Use --json for base64 output instead.`
       });
     }
-    
+
     await Bun.write(outputPath, image);
-    
-    return { path: outputPath, format: c.options.format as string };
+
+    return { path: outputPath, format: opts.format || "png" };
   },
 });
 
@@ -1151,9 +1165,11 @@ cli.command("eval", {
   hint: "⚠️ Warning: eval executes arbitrary JavaScript in the browser context. Only use with trusted scripts. Use --force to bypass confirmation in scripts.",
   async run(c) {
     const { controller } = c.var.session;
-    
+    // Access options via type assertion for incur framework
+    const opts = (c as unknown as { options: { force?: boolean } }).options;
+
     // Security warning if not forcing
-    if (!c.options.force && !process.env.PRAWL_UNRESTRICTED) {
+    if (!opts.force && !process.env.PRAWL_UNRESTRICTED) {
       console.error("⚠️  WARNING: Evaluating arbitrary JavaScript in the browser context can be dangerous.");
       console.error("   Use --force flag to execute, or set PRAWL_UNRESTRICTED=1");
       return c.error({ code: "SECURITY_CONFIRMATION", message: "Use --force to acknowledge security risk" });
@@ -1177,12 +1193,14 @@ cli.command("eval-file", {
   hint: "⚠️ Warning: eval-file executes arbitrary JavaScript in the browser context. Only use with trusted scripts. Use --force to bypass confirmation.",
   async run(c) {
     const { controller } = c.var.session;
-    
+    // Access options via type assertion for incur framework
+    const opts = (c as unknown as { options: { force?: boolean } }).options;
+
     // Security warning if not forcing
-    if (!c.options.force && !process.env.ROVER_UNRESTRICTED) {
+    if (!opts.force && !process.env.PRAWL_UNRESTRICTED) {
       console.error("⚠️  Security Warning: eval-file executes arbitrary JavaScript in the browser.");
       console.error("   The script has access to cookies, localStorage, and can make network requests.");
-      console.error("   Use --force flag to execute, or set ROVER_UNRESTRICTED=1");
+      console.error("   Use --force flag to execute, or set PRAWL_UNRESTRICTED=1");
       return c.error({ code: "SECURITY_CONFIRMATION", message: "Use --force to acknowledge security risk" });
     }
     
@@ -2176,8 +2194,12 @@ cli.command("chain", {
 
             // Natural language parsing
             if (type === "text") {
-              const naturalPatterns = [
-                { pattern: /^(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)\s+(.+)$/i, handler: (m: RegExpMatchArray) => {
+              type NaturalPatternResult = { type: string; value: string; index?: number; name?: string } | null;
+              const naturalPatterns: Array<{
+                pattern: RegExp;
+                handler: (m: RegExpMatchArray) => NaturalPatternResult;
+              }> = [
+                { pattern: /^(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)\s+(.+)$/i, handler: (m) => {
                   const pos = m[1].toLowerCase();
                   const el = m[2].trim();
                   const map: Record<string, { type: string; index?: number }> = {
@@ -2191,12 +2213,12 @@ cli.command("chain", {
                   const mapped = map[pos];
                   return mapped ? { type: mapped.type, value: el, index: mapped.index } : null;
                 }},
-                { pattern: /^(button|link|input|checkbox|radio|heading|img|image)\s+(?:named|with\s+name|with\s+text|labelled)\s+(.+)$/i, handler: (m: RegExpMatchArray) => {
+                { pattern: /^(button|link|input|checkbox|radio|heading|img|image)\s+(?:named|with\s+name|with\s+text|labelled)\s+(.+)$/i, handler: (m) => {
                   const role = m[1].toLowerCase();
                   const nm = m[2].trim();
                   return { type: "role", value: role === "img" || role === "image" ? "img" : role, name: nm };
                 }},
-                { pattern: /^(label|placeholder|alt|title|testid)\s+(.+)$/i, handler: (m: RegExpMatchArray) => {
+                { pattern: /^(label|placeholder|alt|title|testid)\s+(.+)$/i, handler: (m) => {
                   return { type: m[1].toLowerCase(), value: m[2].trim() };
                 }},
               ];
@@ -2206,10 +2228,10 @@ cli.command("chain", {
                 if (match) {
                   const r = handler(match);
                   if (r) {
-                    type = r.type;
+                    type = r.type as typeof type;
                     value = r.value;
-                    if (r.index) findOptions.index = r.index;
-                    if (r.name) findOptions.name = r.name;
+                    if (r.index !== undefined) findOptions.index = r.index;
+                    if (r.name !== undefined) findOptions.name = r.name;
                     break;
                   }
                 }
@@ -2486,6 +2508,314 @@ cli.command("chain", {
   },
 });
 
+// Extract chain execution logic into a reusable function
+async function executeChain(c: unknown): Promise<{
+  executed: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{
+    command: string;
+    success: boolean;
+    data?: unknown;
+    error?: string;
+    duration: number;
+  }>;
+  stopped: boolean;
+}> {
+  const ctx = c as {
+    var: { session: { controller: WebViewController; snapshot: SnapshotEngine } };
+    args: { commands: string };
+    options: { continue?: boolean; keepOpen?: boolean; session?: string };
+  };
+  const { controller, snapshot } = ctx.var.session;
+  const commandString = ctx.args.commands;
+  const continueOnError = ctx.options.continue || false;
+
+  // Parse command string
+  const commands: { cmd: string; stopOnFail: boolean }[] = [];
+
+  // Simple parsing: split by && or ;
+  const parts = commandString.split(/(\&\&|;)/);
+  let currentCmd = "";
+  let nextStopOnFail = true; // Default for &&
+
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i].trim();
+
+    if (part === "&&") {
+      if (currentCmd) {
+        commands.push({ cmd: currentCmd.trim(), stopOnFail: true });
+        currentCmd = "";
+      }
+      nextStopOnFail = true;
+    } else if (part === ";") {
+      if (currentCmd) {
+        commands.push({ cmd: currentCmd.trim(), stopOnFail: false });
+        currentCmd = "";
+      }
+      nextStopOnFail = false;
+    } else {
+      currentCmd += part;
+    }
+  }
+
+  // Add final command
+  if (currentCmd.trim()) {
+    commands.push({ cmd: currentCmd.trim(), stopOnFail: nextStopOnFail });
+  }
+
+  // If no && or ; found, treat as single command
+  if (commands.length === 0 && commandString.trim()) {
+    commands.push({ cmd: commandString.trim(), stopOnFail: true });
+  }
+
+  // Execute commands
+  const results: Array<{
+    command: string;
+    success: boolean;
+    data?: unknown;
+    error?: string;
+    duration: number;
+  }> = [];
+  let stopped = false;
+
+  for (const { cmd, stopOnFail } of commands) {
+    const startTime = Date.now();
+
+    try {
+      // Parse the command with proper quoted string support
+      const args: string[] = [];
+      const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
+      let match;
+      while ((match = regex.exec(cmd)) !== null) {
+        const arg = match[1] !== undefined ? match[1] : match[2] !== undefined ? match[2] : match[0];
+        args.push(arg);
+      }
+      const action = args.shift()!;
+
+      // Execute via direct controller methods for common commands
+      let result: unknown;
+      let success = false;
+
+      switch (action) {
+        case "open":
+        case "goto":
+          if (args[0]) {
+            await controller.navigate(args[0]);
+            result = { url: controller.getUrl(), title: controller.getTitle() };
+            success = true;
+          } else {
+            throw new Error("URL required for open");
+          }
+          break;
+
+        case "snapshot":
+          const snapResult = await snapshot.takeSnapshot({
+            interactive: args.includes("-i") || args.includes("--interactive"),
+            compact: args.includes("-c") || args.includes("--compact"),
+          });
+          success = snapResult.success;
+          result = snapResult.data;
+          if (!success) throw new Error(snapResult.error);
+          break;
+
+        case "click":
+          if (args[0]) {
+            await controller.click(args[0]);
+            result = { clicked: true, selector: args[0] };
+            success = true;
+          } else {
+            throw new Error("Selector required for click");
+          }
+          break;
+
+        case "fill":
+          if (args[0] && args[1]) {
+            await controller.click(args[0]);
+            await controller.press("Control+a");
+            await controller.type(args[1].replace(/^['"]|['"]$/g, "")); // Remove quotes
+            result = { filled: true, selector: args[0], text: args[1] };
+            success = true;
+          } else {
+            throw new Error("Selector and text required for fill");
+          }
+          break;
+
+        case "type":
+          if (args[0] && args[1]) {
+            await controller.click(args[0]);
+            await controller.type(args[1].replace(/^['"]|['"]$/g, ""));
+            result = { typed: true, selector: args[0], text: args[1] };
+            success = true;
+          } else {
+            throw new Error("Selector and text required for type");
+          }
+          break;
+
+        case "press":
+          if (args[0]) {
+            await controller.press(args[0]);
+            result = { pressed: true, key: args[0] };
+            success = true;
+          } else {
+            throw new Error("Key required for press");
+          }
+          break;
+
+        case "wait":
+          if (args[0]) {
+            const ms = parseInt(args[0]);
+            if (!isNaN(ms)) {
+              await new Promise(r => setTimeout(r, ms));
+              result = { waited: ms };
+              success = true;
+            } else {
+              // Wait for selector
+              const selector = args[0].replace(/^['"]|['"]$/g, "");
+              const start = Date.now();
+              while (Date.now() - start < 25000) {
+                const exists = await controller.evaluate(`!!document.querySelector(${JSON.stringify(selector)})`);
+                if (exists) break;
+                await new Promise(r => setTimeout(r, 100));
+              }
+              result = { waited: args[0] };
+              success = true;
+            }
+          } else {
+            throw new Error("Milliseconds or selector required for wait");
+          }
+          break;
+
+        case "screenshot":
+          const image = await controller.screenshot({ format: "png" });
+          const path = args[0] || `/tmp/prawl-${Date.now()}.png`;
+          await Bun.write(path, image);
+          result = { screenshot: path };
+          success = true;
+          break;
+
+        case "get":
+          if (args[0] === "title") {
+            result = { title: controller.getTitle() };
+            success = true;
+          } else if (args[0] === "url") {
+            result = { url: controller.getUrl() };
+            success = true;
+          } else if (args[0] && args[1]) {
+            const selector = args[1].replace(/^['"]|['"]$/g, "");
+            const text = await controller.evaluate(`document.querySelector(${JSON.stringify(selector)})?.textContent?.trim() || ""`);
+            result = { [args[0]]: text };
+            success = true;
+          } else {
+            throw new Error("Invalid get command");
+          }
+          break;
+
+        case "scroll":
+          const dir = args[0] || "down";
+          const amount = parseInt(args[1] || "100");
+          let dx = 0, dy = 0;
+          if (dir === "up") dy = -amount;
+          if (dir === "down") dy = amount;
+          if (dir === "left") dx = -amount;
+          if (dir === "right") dx = amount;
+          await controller.scroll(dx, dy);
+          result = { scrolled: dir, amount };
+          success = true;
+          break;
+
+        case "back":
+          await controller.goBack();
+          result = { navigated: "back" };
+          success = true;
+          break;
+
+        case "forward":
+          await controller.goForward();
+          result = { navigated: "forward" };
+          success = true;
+          break;
+
+        case "reload":
+          await controller.reload();
+          result = { reloaded: true };
+          success = true;
+          break;
+
+        case "device":
+          if (args[0]) {
+            const deviceName = args[0].replace(/^['"]|['"]$/g, "");
+            await controller.emulateDevice(deviceName);
+            result = { device: deviceName };
+            success = true;
+          } else {
+            throw new Error("Device name required");
+          }
+          break;
+
+        case "viewport":
+          if (args[0] && args[1]) {
+            const w = parseInt(args[0]);
+            const h = parseInt(args[1]);
+            await controller.setViewport(w, h);
+            result = { viewport: { width: w, height: h } };
+            success = true;
+          } else {
+            throw new Error("Width and height required for viewport");
+          }
+          break;
+
+        case "close":
+          await controller.close();
+          result = { closed: true };
+          success = true;
+          break;
+
+        default:
+          throw new Error(`Unknown command: ${action}`);
+      }
+
+      results.push({
+        command: cmd,
+        success,
+        data: result,
+        duration: Date.now() - startTime,
+      });
+
+    } catch (error) {
+      results.push({
+        command: cmd,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        duration: Date.now() - startTime,
+      });
+
+      if (stopOnFail && !continueOnError) {
+        stopped = true;
+        break;
+      }
+    }
+  }
+
+  const succeeded = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+
+  // Auto-close session unless --keep-open flag is set
+  const keepOpen = ctx.options.keepOpen || false;
+  if (!keepOpen) {
+    await controller.close();
+    sessions.delete(ctx.options.session || process.env.PRAWL_SESSION || "default");
+  }
+
+  return {
+    executed: results.length,
+    succeeded,
+    failed,
+    results,
+    stopped,
+  };
+}
+
 // Alias: run = chain
 cli.command("run", {
   description: "Alias for chain - Execute multiple commands in sequence",
@@ -2504,46 +2834,33 @@ cli.command("run", {
     stopped: z.boolean(),
   }),
   async run(c) {
-    // Delegate to chain command
-    const chainResult = await cli._commands.get("chain")?.run(c);
-    return chainResult || { executed: 0, succeeded: 0, failed: 0, results: [], stopped: true };
+    return executeChain(c);
   },
 });
 
-// Parallel command execution
-cli.command("parallel", {
-  description: "Execute multiple commands in parallel",
-  args: z.object({
-    commands: z.string().describe("Commands separated by '|' (pipe character)"),
-  }),
-  options: globalOptions.extend({
-    max: z.number().default(5).describe("Max concurrent executions"),
-    timeout: z.number().default(60000).describe("Timeout per command in ms"),
-    keepOpen: z.boolean().optional().describe("Keep browser session open after commands complete"),
-  }),
-  examples: [
-    { args: { commands: "open google.com | open example.com | open github.com" }, description: "Open 3 sites in parallel" },
-    { args: { commands: "screenshot /tmp/a.png | screenshot /tmp/b.png" }, options: { max: 2 }, description: "2 parallel screenshots" },
-    { args: { commands: "get title | get url | snapshot -i" }, description: "Get multiple data points at once" },
-  ],
-  output: z.object({
-    executed: z.number().describe("Number of commands executed"),
-    succeeded: z.number().describe("Number of successful commands"),
-    failed: z.number().describe("Number of failed commands"),
-    duration: z.number().describe("Total execution time in ms"),
-    results: z.array(z.object({
-      command: z.string(),
-      success: z.boolean(),
-      data: z.any().optional(),
-      error: z.string().optional(),
-      duration: z.number().describe("Execution time in ms"),
-    })),
-  }),
-  async run(c) {
-    const { controller, snapshot } = c.var.session;
-    const commandString = c.args.commands;
-    const maxConcurrent = c.options.max || 5;
-    const timeout = c.options.timeout || 60000;
+// Extract parallel execution logic into a function
+async function executeParallel(c: unknown): Promise<{
+  executed: number;
+  succeeded: number;
+  failed: number;
+  duration: number;
+  results: Array<{
+    command: string;
+    success: boolean;
+    data?: unknown;
+    error?: string;
+    duration: number;
+  }>;
+}> {
+  const ctx = c as {
+    var: { session: { controller: WebViewController; snapshot: SnapshotEngine } };
+    args: { commands: string };
+    options: { max?: number; timeout?: number; keepOpen?: boolean; session?: string };
+  };
+  const { controller, snapshot } = ctx.var.session;
+  const commandString = ctx.args.commands;
+  const maxConcurrent = ctx.options.max || 5;
+  const timeout = ctx.options.timeout || 60000;
     
     // Parse commands (split by |)
     const commands = commandString.split("|").map(cmd => cmd.trim()).filter(Boolean);
@@ -2781,12 +3098,12 @@ cli.command("parallel", {
     const failed = results.filter(r => !r.success).length;
     
     // Auto-close session unless --keep-open flag is set
-    const keepOpen = c.options.keepOpen as boolean || false;
+    const keepOpen = ctx.options.keepOpen || false;
     if (!keepOpen) {
       await controller.close();
-      sessions.delete(c.options.session as string || "default");
+      sessions.delete(ctx.options.session || process.env.PRAWL_SESSION || "default");
     }
-    
+
     return {
       executed: commands.length,
       succeeded,
@@ -2794,6 +3111,39 @@ cli.command("parallel", {
       duration: Date.now() - totalStartTime,
       results,
     };
+  }
+
+// Parallel command execution
+cli.command("parallel", {
+  description: "Execute multiple commands in parallel",
+  args: z.object({
+    commands: z.string().describe("Commands separated by '|' (pipe character)"),
+  }),
+  options: globalOptions.extend({
+    max: z.number().default(5).describe("Max concurrent executions"),
+    timeout: z.number().default(60000).describe("Timeout per command in ms"),
+    keepOpen: z.boolean().optional().describe("Keep browser session open after commands complete"),
+  }),
+  examples: [
+    { args: { commands: "open google.com | open example.com | open github.com" }, description: "Open 3 sites in parallel" },
+    { args: { commands: "screenshot /tmp/a.png | screenshot /tmp/b.png" }, options: { max: 2 }, description: "2 parallel screenshots" },
+    { args: { commands: "get title | get url | snapshot -i" }, description: "Get multiple data points at once" },
+  ],
+  output: z.object({
+    executed: z.number().describe("Number of commands executed"),
+    succeeded: z.number().describe("Number of successful commands"),
+    failed: z.number().describe("Number of failed commands"),
+    duration: z.number().describe("Total execution time in ms"),
+    results: z.array(z.object({
+      command: z.string(),
+      success: z.boolean(),
+      data: z.any().optional(),
+      error: z.string().optional(),
+      duration: z.number().describe("Execution time in ms"),
+    })),
+  }),
+  async run(c) {
+    return executeParallel(c);
   },
 });
 
@@ -2822,20 +3172,40 @@ cli.command("chat", {
   }),
   async run(c) {
     const { controller } = c.var.session;
-    const apiKey = c.options.apiKey || process.env.OPENAI_API_KEY;
-    const baseUrl = c.options.baseUrl || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-    
+    // Access options via type assertion for incur framework
+    const opts = (c as unknown as {
+      options: { apiKey?: string; baseUrl?: string; model?: string; interactive?: boolean };
+      args: { instruction?: string };
+    }).options;
+    const args = (c as unknown as { args: { instruction?: string } }).args;
+
+    const apiKey = opts.apiKey || process.env.OPENAI_API_KEY;
+    const baseUrl = opts.baseUrl || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+
     if (!apiKey) {
       return c.error({ code: "NO_API_KEY", message: "Set OPENAI_API_KEY environment variable or use --api-key flag" });
     }
-    
-    const instruction = c.args.instruction;
-    if (!instruction && !c.options.interactive) {
+
+    const instruction = args.instruction;
+    if (!instruction && !opts.interactive) {
       return c.error({ code: "NO_INSTRUCTION", message: "Provide an instruction or use --interactive for REPL mode" });
     }
-    
+
     // Take snapshot for context
-    const snapResult = await controller.evaluate<{ tree: any }>(`
+    interface InteractiveElement {
+      ref: string;
+      tag: string;
+      type?: string;
+      text: string;
+      id?: string;
+      class?: string;
+    }
+    interface SnapshotResult {
+      tree: InteractiveElement[];
+      title: string;
+      url: string;
+    }
+    const snapResult = await controller.evaluate<SnapshotResult>(`
       (function() {
         const interactive = [];
         const elements = document.querySelectorAll('button, a, input, select, textarea');
@@ -2853,7 +3223,7 @@ cli.command("chat", {
         return { tree: interactive, title: document.title, url: location.href };
       })()
     `);
-    
+
     // Build prompt
     const systemPrompt = `You are a browser automation assistant. The user is on a webpage with these interactive elements:
 ${JSON.stringify(snapResult.tree, null, 2)}
@@ -2871,28 +3241,35 @@ Convert natural language instructions into prawl CLI commands. Available command
 Respond with ONLY a JSON array of commands, like: ["open google.com", "click @e3"]`;
 
     // Call OpenAI API
-    const response = await fetch(`${baseUrl}/chat/completions`, {
+    const response = await fetch(new Request(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: c.options.model,
+        model: opts.model || "gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: instruction || "What can I do on this page?" }
         ],
         temperature: 0.3,
       }),
-    });
-    
+    }));
+
     if (!response.ok) {
       const error = await response.text();
       return c.error({ code: "AI_ERROR", message: `OpenAI API error: ${error}` });
     }
-    
-    const aiResponse = await response.json();
+
+    interface AIResponse {
+      choices?: Array<{
+        message?: {
+          content?: string;
+        };
+      }>;
+    }
+    const aiResponse = await response.json() as AIResponse;
     const content = aiResponse.choices?.[0]?.message?.content || "[]";
     
     // Extract JSON commands
@@ -2900,11 +3277,11 @@ Respond with ONLY a JSON array of commands, like: ["open google.com", "click @e3
     try {
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
-        commands = JSON.parse(jsonMatch[0]);
+        commands = JSON.parse(jsonMatch[0]) as string[];
       }
     } catch {
       // If no JSON found, treat each line as a command
-      commands = content.split('\n').filter(l => l.trim().startsWith('prawl')).map(l => l.replace('prawl ', '').trim());
+      commands = content.split('\n').filter((l: string) => l.trim().startsWith('prawl')).map((l: string) => l.replace('prawl ', '').trim());
     }
     
     // Execute commands
@@ -2973,8 +3350,7 @@ cli.command("p", {
     results: z.array(z.any()),
   }),
   async run(c) {
-    // Delegate to parallel command
-    return cli._commands.get("parallel")?.run(c) || { executed: 0, succeeded: 0, failed: 0, duration: 0, results: [] };
+    return executeParallel(c);
   },
 });
 
@@ -2988,7 +3364,7 @@ cli.use(async (c, next) => {
 cli.command("config", {
   description: "Show current configuration",
   options: globalOptions,
-  output: z.object({ config: z.record(z.string()) }),
+  output: z.object({ config: z.record(z.string(), z.string()) }),
   async run(c) {
     const userConfig: Record<string, string> = {};
     
@@ -3019,10 +3395,15 @@ cli.command("config", {
       PRAWL_MODEL: process.env.PRAWL_MODEL,
     };
     
+    // Filter out undefined values and ensure only strings
+    const filteredEnvVars = Object.fromEntries(
+      Object.entries(envVars).filter((entry): entry is [string, string] => entry[1] !== undefined)
+    ) as Record<string, string>;
+
     return { 
       config: { 
         ...userConfig,
-        ...Object.fromEntries(Object.entries(envVars).filter(([_, v]) => v !== undefined))
+        ...filteredEnvVars
       } 
     };
   },

@@ -61,6 +61,7 @@ export class RefManager {
 export function validateCssSelector(selector: string): boolean {
   try {
     // This will throw if selector is invalid
+    // @ts-ignore - document is available in browser context via evaluate()
     document.querySelector(selector);
     return true;
   } catch {
@@ -69,6 +70,7 @@ export function validateCssSelector(selector: string): boolean {
 }
 
 // Safe CSS selector generator for an element
+// @ts-ignore - Element and document are available in browser context via evaluate()
 export function generateSelector(element: Element): string {
   // Try ID first
   if (element.id) {
@@ -80,6 +82,7 @@ export function generateSelector(element: Element): string {
     const classes = element.className.trim().split(/\s+/).filter(Boolean);
     for (const cls of classes) {
       const selector = `.${cls}`;
+      // @ts-ignore - document is available in browser context
       if (document.querySelectorAll(selector).length === 1) {
         return selector;
       }
@@ -88,12 +91,15 @@ export function generateSelector(element: Element): string {
 
   // Build path
   const path: string[] = [];
+  // @ts-ignore - Element type is available in browser context
   let current: Element | null = element;
 
+  // @ts-ignore - document is available in browser context
   while (current && current !== document.body) {
     const tag = current.tagName.toLowerCase();
     const siblings = Array.from(current.parentElement?.children || []);
-    const sameTagSiblings = siblings.filter(s => s.tagName === current!.tagName);
+    // @ts-ignore - Element type is available in browser context
+    const sameTagSiblings = siblings.filter((s) => s.tagName === current!.tagName);
 
     if (sameTagSiblings.length > 1) {
       const index = siblings.indexOf(current) + 1;

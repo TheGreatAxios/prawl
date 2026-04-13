@@ -15,6 +15,8 @@
     "build": "tsdown",
     "compile": "bun build --compile --minify --sourcemap ./dist/cli.mjs --outfile prawl",
     "dev": "bun run --silent src/cli.ts",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
     "prepublishOnly": "bun run build",
     "publish": "npm publish"
   },

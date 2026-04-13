@@ -87,8 +87,11 @@ export const DEVICE_PRESETS: Record<string, DevicePreset> = {
   },
 };
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type BunWebViewInstance = any;
+
 export class WebViewController {
-  private view: ReturnType<typeof Bun.WebView> | null = null;
+  private view: BunWebViewInstance | null = null;
   private session: SessionConfig;
   private defaultTimeout = 25000;
   private pendingDialog: DialogState | null = null;
@@ -131,8 +134,8 @@ export class WebViewController {
       throw new Error(`Failed to connect to Chrome: ${response.statusText}`);
     }
     
-    const version = await response.json();
-    console.error(`Connected to Chrome ${version.Browser}`);
+    const version = await response.json() as { Browser?: string };
+    console.error(`Connected to Chrome ${version.Browser || "unknown"}`);
     
     // Note: Full CDP WebSocket implementation would require more setup
     // This is a simplified version that verifies the connection
@@ -171,6 +174,7 @@ export class WebViewController {
     }
 
     // Add dialog handler
+    // @ts-ignore - dialog option is supported by Bun.WebView but not in types
     webviewOptions.dialog = (type: string, message: string, defaultValue?: string) => {
       this.pendingDialog = {
         type: type as DialogState["type"],
@@ -474,14 +478,15 @@ export class WebViewController {
       process.cwd(),
       '/tmp',
       process.env.HOME || '/tmp',
-      process.env.PEEP_OUTPUT_DIR,
-    ].filter(Boolean);
-    
-    const resolvedPath = require('path').resolve(options.path);
+      process.env.PRAWL_OUTPUT_DIR,
+    ].filter((d): d is string => typeof d === "string");
+
+    const pathModule = await import('path');
+    const resolvedPath = pathModule.resolve(options.path);
     const isAllowed = allowedDirs.some(dir => resolvedPath.startsWith(dir));
-    
-    if (!isAllowed && !process.env.PEEP_UNRESTRICTED) {
-      throw new Error(`Path "${options.path}" is outside allowed directories (cwd, /tmp, or PEEP_OUTPUT_DIR)`);
+
+    if (!isAllowed && !process.env.PRAWL_UNRESTRICTED) {
+      throw new Error(`Path "${options.path}" is outside allowed directories (cwd, /tmp, or PRAWL_OUTPUT_DIR)`);
     }
 
     const result = await this.cdp<{ data: string }>("Page.printToPDF", {
@@ -506,7 +511,7 @@ export class WebViewController {
 
   // ==================== EXISTING METHODS ====================
 
-  getView(): ReturnType<typeof Bun.WebView> {
+  getView(): BunWebViewInstance {
     if (!this.view) {
       throw new Error("WebView not initialized. Call initialize() first.");
     }

@@ -6,10 +6,47 @@ import { navigate, close } from "./navigate";
 import { click, fill, type as typeCommand, press, hover, scroll, scrollTo } from "./interact";
 import { snapshot } from "./snapshot-cmd";
 import { get, is } from "./query";
-import { wait } from "./wait";
-import { screenshot } from "./screenshot";
-import { goBack, goForward, reload } from "./navigation";
-import { batch } from "./batch";
+
+// Stub implementations for missing command files
+const wait = async (controller: WebViewController, selector: string, options?: Record<string, unknown>) => {
+  const timeout = (options?.timeout as number) || 25000;
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeout) {
+    const exists = await controller.evaluate<boolean>(`!!document.querySelector(${JSON.stringify(selector)})`);
+    if (exists) return { success: true, data: "Element found" };
+    await new Promise(r => setTimeout(r, 100));
+  }
+  return { success: false, error: `Timeout waiting for ${selector}` };
+};
+
+const screenshot = async (controller: WebViewController, path?: string, options?: Record<string, unknown>) => {
+  const image = await controller.screenshot({
+    format: (options?.format as "png" | "jpeg" | "webp") || "png",
+    fullPage: options?.fullPage as boolean,
+  });
+  const outputPath = path || `/tmp/prawl-${Date.now()}.png`;
+  await Bun.write(outputPath, image);
+  return { success: true, data: outputPath };
+};
+
+const goBack = async (controller: WebViewController) => {
+  await controller.goBack();
+  return { success: true, data: "Navigated back" };
+};
+
+const goForward = async (controller: WebViewController) => {
+  await controller.goForward();
+  return { success: true, data: "Navigated forward" };
+};
+
+const reload = async (controller: WebViewController) => {
+  await controller.reload();
+  return { success: true, data: "Reloaded" };
+};
+
+const batch = async (_controller: WebViewController, _engine: SnapshotEngine, _args: unknown[], _options?: Record<string, unknown>) => {
+  return { success: false, error: "Batch command not yet implemented" };
+};
 
 // Command handler function type
 type CommandHandler = (

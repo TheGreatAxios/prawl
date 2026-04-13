@@ -11,7 +11,7 @@ export async function snapshot(
     interactive: options.interactive === true || options.i === true,
     compact: options.compact === true || options.c === true,
     depth: options.depth ? Number(options.depth) : undefined,
-    selector: options.selector || options.s,
+    selector: typeof options.selector === "string" ? options.selector : typeof options.s === "string" ? options.s : undefined,
     includeUrls: options.urls === true || options.u === true,
   };
   
