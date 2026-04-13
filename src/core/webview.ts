@@ -199,9 +199,12 @@ export class WebViewController {
 
     await this.loadSessionState();
 
-    console.error(`Session: ${this.session.name} (${this.session.isPrivate ? "private" : "persistent"})`);
-    console.error(`Storage: ${this.session.storagePath}`);
-    console.error(`Backend: ${this.isChromeBackend ? "Chrome" : "WebKit"}`);
+    // Only log session info if not in quiet mode (for programmatic use)
+    if (!process.env.PRAWL_QUIET) {
+      console.error(`Session: ${this.session.name} (${this.session.isPrivate ? "private" : "persistent"})`);
+      console.error(`Storage: ${this.session.storagePath}`);
+      console.error(`Backend: ${this.isChromeBackend ? "Chrome" : "WebKit"}`);
+    }
   }
 
   // ==================== CDP ACCESS (Chrome Backend Only) ====================

@@ -19,7 +19,7 @@ async function run(command: string, timeout = TEST_TIMEOUT): Promise<{ stdout: s
 
   const proc = Bun.spawn(["bun", "run", "--silent", "src/cli.ts", ...cleanArgs], {
     cwd: process.cwd(),
-    env: { ...process.env, PRAWL_SESSION: "test-session" },
+    env: { ...process.env, PRAWL_SESSION: "test-session", PRAWL_QUIET: "1" },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -492,7 +492,7 @@ describe("prawl CLI", () => {
       // Use PRAWL_SESSION env var instead of --session flag for better compatibility
       const proc = Bun.spawn(["bun", "run", "--silent", "src/cli.ts", "open", "example.com", "--json"], {
         cwd: process.cwd(),
-        env: { ...process.env, PRAWL_SESSION: "named-test" },
+        env: { ...process.env, PRAWL_SESSION: "named-test", PRAWL_QUIET: "1" },
         stdout: "pipe",
         stderr: "pipe",
       });
