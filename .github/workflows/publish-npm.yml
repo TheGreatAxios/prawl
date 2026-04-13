@@ -6,7 +6,7 @@ on:
       - main
 
 permissions:
-  id-token: write  # Required for OIDC
+  id-token: write
   contents: read
 
 jobs:
@@ -37,7 +37,11 @@ jobs:
           else
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish to npm with OIDC
+      - name: Publish to npm
         if: steps.check.outputs.exists == 'false'
         run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
