@@ -1,0 +1,94 @@
+# Quick Start
+
+Let's automate a browser workflow in under 30 seconds.
+
+## 1. Open a Page
+
+```bash
+prawl open google.com
+```
+
+Output:
+```
+Session: default (persistent)
+url: "https://www.google.com/"
+title: Google
+```
+
+## 2. Take a Snapshot
+
+The snapshot shows the accessibility tree with `@eN` references:
+
+```bash
+prawl snapshot -i
+```
+
+Output:
+```
+- generic "Google" [ref=e1]
+- textbox "Search" [ref=e2, placeholder="Search Google or type a URL"]
+- button "Google Search" [ref=e3]
+  clickable [cursor:pointer]
+- link "Gmail" [ref=e4, url=https://mail.google.com/]
+```
+
+## 3. Interact
+
+Use the `@eN` refs to interact:
+
+```bash
+prawl fill @e2 "prawl browser automation"
+prawl press Enter
+```
+
+## 4. Chain Commands
+
+Do it all in one go:
+
+```bash
+prawl chain "open google.com && snapshot -i && fill @e2 'hello world' && press Enter"
+```
+
+## 5. Screenshot
+
+```bash
+prawl screenshot search-results.png
+```
+
+## 6. Close
+
+```bash
+prawl close
+```
+
+## Full Workflow Example
+
+```bash
+prawl chain "open example.com && \
+  snapshot -i && \
+  fill @e1 'John Doe' && \
+  fill @e2 'john@example.com' && \
+  click @e3 && \
+  wait 3000 && \
+  screenshot result.png"
+```
+
+This:
+1. Opens example.com
+2. Gets the accessibility tree
+3. Fills name and email
+4. Clicks submit
+5. Waits 3 seconds
+6. Takes a screenshot
+
+## What's Next?
+
+- Learn about [Sessions](/sessions) - how prawl manages browser state
+- Explore [Command Chaining](/chaining) - execute multiple commands
+- Check out [Examples](/examples/form) - real-world automation patterns
+
+## FAQ
+
+**Q: What port does the HTTP API use?**
+
+prawl auto-selects an available port. When you see `Started development server: http://localhost:49162` (or similar), that's the HTTP API endpoint. Use `--json` output to get the exact URL.

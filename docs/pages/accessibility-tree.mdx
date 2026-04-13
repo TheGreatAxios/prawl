@@ -1,0 +1,139 @@
+# Accessibility Tree
+
+The **accessibility tree** is peep's unique approach to web automation. Instead of brittle CSS selectors, you work with semantic references that are stable across page changes.
+
+## What is the Accessibility Tree?
+
+When you run `peep snapshot`, peep extracts the page's semantic structure:
+
+```bash
+peep snapshot -i
+```
+
+Output:
+```
+- heading "Welcome to Example" [ref=e1, level=1]
+- textbox "Email Address" [ref=e2, placeholder="you@example.com"]
+  required [required]
+- textbox "Password" [ref=e3, placeholder="••••••••"]
+  required [required]
+- checkbox "Remember me" [checked=false, ref=e4]
+- button "Sign In" [ref=e5]
+  clickable [cursor:pointer]
+- link "Forgot password?" [ref=e6, url=/reset]
+```
+
+## Understanding the Format
+
+```
+- {role} "{name}" [ref=eN, attributes]
+  {extra info}
+```
+
+### Role
+The element's semantic role (button, link, textbox, heading, etc.)
+
+### Name
+The accessible name users would hear from a screen reader
+
+### Ref
+Stable `@eN` reference for interaction
+
+### Attributes
+- `level` - For headings (1-6)
+- `placeholder` - Input placeholder text
+- `checked` - Checkbox/radio state
+- `required` - Required field
+- `disabled` - Disabled state
+- `url` - Link destination
+
+## Interactive Elements Only
+
+Use `-i` flag to show only interactive elements (buttons, links, inputs):
+
+```bash
+peep snapshot -i
+```
+
+This filters out non-interactive structural elements.
+
+## Using @eN References
+
+Once you have refs, use them for interactions:
+
+```bash
+# Click a button
+peep click @e5
+
+# Fill an input
+peep fill @e2 "test@example.com"
+
+# Check a checkbox
+peep click @e4
+```
+
+**Why refs are better than selectors:**
+- Stable across DOM changes
+- Semantic (based on role/name, not position)
+- Self-documenting (you know what @e5 does)
+
+## Advanced Snapshot Options
+
+### Compact Mode
+
+Remove empty structural nodes:
+
+```bash
+peep snapshot -c
+```
+
+### Limit Depth
+
+Don't recurse too deep:
+
+```bash
+peep snapshot -d 3
+```
+
+### Scope to Selector
+
+Only snapshot part of the page:
+
+```bash
+peep snapshot -s "#main-content"
+```
+
+### Include URLs
+
+Show link destinations:
+
+```bash
+peep snapshot -u
+```
+
+## Comparison: Refs vs Selectors
+
+| Approach | Example | Pros | Cons |
+|----------|---------|------|------|
+| **@eN Refs** | `peep click @e5` | Stable, semantic, readable | Need snapshot first |
+| **CSS Selectors** | `peep click "#submit-btn"` | Direct, no snapshot needed | Brittle, breaks on changes |
+| **XPath** | `peep click "//button[3]"` | Powerful | Brittle, complex |
+
+## Best Practices
+
+1. **Always snapshot first** on new pages
+2. **Use refs** for repeated interactions
+3. **Use selectors** only for dynamic content
+4. **Snapshot again** if page changes significantly
+5. **Use -i flag** to reduce noise
+
+## How It Works
+
+peep injects JavaScript into the page that:
+
+1. Walks the DOM tree
+2. Extracts semantic roles and names
+3. Assigns stable `@eN` references
+4. Returns structured data
+
+The accessibility tree mirrors what screen readers see, making it naturally semantic and stable.

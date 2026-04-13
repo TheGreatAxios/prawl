@@ -1,0 +1,129 @@
+# Sessions
+
+peep maintains browser sessions that persist between commands. Understanding sessions is key to effective automation.
+
+## Default Session
+
+When you run peep without specifying a session, it uses the **default** session:
+
+```bash
+peep open google.com
+```
+
+This creates:
+- Session name: `default`
+- Storage: `~/.peep/sessions/default/`
+- Persistence: Cookies, localStorage, sessionStorage are saved
+
+The session remains open until you explicitly close it or restart your machine.
+
+## Named Sessions
+
+Create isolated sessions for different projects:
+
+```bash
+# Work session
+peep --session work open github.com
+peep --session work snapshot
+
+# Personal session  
+peep --session personal open twitter.com
+
+# Both sessions are independent
+peep sessions  # Lists: default, work, personal
+```
+
+Each named session has its own storage directory:
+- `~/.peep/sessions/work/`
+- `~/.peep/sessions/personal/`
+
+## Private Sessions
+
+For sensitive sites, use a **private** session:
+
+```bash
+peep --session private open bank.example.com
+```
+
+Private sessions:
+- Use a temporary directory (`/tmp/peep-XXXX/`)
+- Are deleted when you run `peep close`
+- Don't persist cookies or storage
+- Are isolated from other sessions
+
+## Session Storage
+
+Each persistent session stores:
+
+| Data | Location | Description |
+|------|----------|-------------|
+| Cookies | `state.json` | HTTP cookies from sites |
+| localStorage | `state.json` | Site local storage |
+| sessionStorage | `state.json` | Site session storage |
+
+## Managing Sessions
+
+### List Active Sessions
+
+```bash
+peep sessions
+```
+
+### Close a Session
+
+```bash
+# Close current/default session
+peep close
+
+# Close specific session
+peep --session work close
+
+# Close all sessions
+peep --session private close  # Auto-deletes private
+```
+
+### Clear Session Data
+
+```bash
+# Remove all stored data for a session
+rm -rf ~/.peep/sessions/work/
+```
+
+## Best Practices
+
+1. **Use default session** for general browsing and quick tasks
+2. **Use named sessions** for projects that need isolated state
+3. **Use private sessions** for sensitive sites or one-off tasks
+4. **Close sessions** when done to free resources
+5. **Don't rely on sessions** between system restarts
+
+## Environment Variables
+
+Set defaults via environment:
+
+```bash
+export PEEP_SESSION=myproject  # Default session name
+export PEEP_HEADED=1          # Show browser window
+export PEEP_BACKEND=webkit    # Default backend
+```
+
+## How It Works
+
+```
+┌─────────────────────────────────────────┐
+│              peep CLI                    │
+├─────────────────────────────────────────┤
+│  --session work                          │
+│    ├── opens WebView                     │
+│    ├── loads ~/.peep/sessions/work/      │
+│    ├── navigates to URL                  │
+│    └── saves state on close              │
+│                                          │
+│  --session personal                      │
+│    ├── separate WebView instance         │
+│    ├── separate storage                  │
+│    └── completely isolated               │
+└─────────────────────────────────────────┘
+```
+
+Sessions are identified by name and tracked in memory while peep is running.

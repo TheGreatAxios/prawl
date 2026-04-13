@@ -1,0 +1,16 @@
+{
+  "name": "prawl-docs",
+  "version": "0.1.0",
+  "description": "Documentation site for prawl - Browser automation for AI agents",
+  "type": "module",
+  "scripts": {
+    "dev": "vocs dev",
+    "build": "vocs build",
+    "preview": "vocs preview"
+  },
+  "dependencies": {
+    "vocs": "latest",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

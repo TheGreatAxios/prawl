@@ -1,0 +1,79 @@
+# prawl Documentation
+
+> Lightweight browser automation for AI agents using Bun.WebView
+
+**prawl** is a fast, lightweight CLI for browser automation designed specifically for AI agents. It provides an accessibility-first approach with stable `@eN` references and powerful command chaining.
+
+## Why prawl?
+
+- **30x smaller** than alternatives (~32KB vs ~165MB)
+- **Instant startup** - no browser downloads, uses system WebKit
+- **AI-optimized** - Accessibility tree with stable refs
+- **Chain & Parallel** - Execute commands efficiently
+- **HTTP API** - Built-in REST API
+- **Mobile ready** - Device emulation built-in
+
+## Quick Start
+
+:::code-group
+
+```bash [Homebrew]
+brew tap thegreataxios/tap
+brew install prawl
+```
+
+```bash [npm]
+npx @thegreataxios/prawl open google.com
+```
+
+```bash [Source]
+git clone https://github.com/thegreataxios/prawl.git
+cd prawl && bun install && bun run build
+```
+
+:::
+
+### Your First Command
+
+```bash
+prawl open google.com
+```
+
+That's it! prawl will:
+1. Start a browser session
+2. Navigate to Google
+3. Return structured data about the page
+
+## Architecture
+
+prawl is built on three core technologies:
+
+1. **Bun.WebView** - Native browser engine (WebKit on macOS, Chrome elsewhere)
+2. **incur** - Type-safe CLI framework with MCP/HTTP support
+3. **Accessibility Tree** - DOM walker that extracts semantic structure
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│   prawl CLI  │────▶│  Bun.WebView │────▶│    Page     │
+│   (incur)   │     │  (WebKit/Chrome)    │             │
+└─────────────┘     └──────────────┘     └─────────────┘
+       │                     │
+       ▼                     ▼
+┌─────────────┐     ┌──────────────┐
+│  HTTP API   │     │  MCP Server  │
+│  (port 3000)│     │  (stdio/tcp) │
+└─────────────┘     └──────────────┘
+```
+
+## Next Steps
+
+- [Installation](/installation) - Get prawl installed
+- [Quick Start](/quick-start) - Your first workflow
+- [Sessions](/sessions) - Understand how prawl manages state
+- [Command Chaining](/chaining) - Execute multiple commands
+
+## Community
+
+- **GitHub**: https://github.com/thegreataxios/prawl
+- **Issues**: https://github.com/thegreataxios/prawl/issues
+- **License**: MIT © Sawyer Cutler

@@ -1,0 +1,13 @@
+interface:
+  display_name: "prawl"
+  short_description: "Browser automation for web navigation, forms, screenshots, and data extraction"
+  icon_small: ""
+  icon_large: ""
+  brand_color: "#3B82F6"
+  default_prompt: "Navigate to a website and take a snapshot to understand the page structure"
+
+policy:
+  allow_implicit_invocation: true
+
+dependencies:
+  tools: []
